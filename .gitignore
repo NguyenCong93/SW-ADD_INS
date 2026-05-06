@@ -1,0 +1,8 @@
+bin/
+obj/
+*.exe
+*.pdb
+*.user
+dump*.txt
+MainTaskPaneDraft*.cs
+.vs/
