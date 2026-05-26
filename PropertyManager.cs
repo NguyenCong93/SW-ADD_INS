@@ -13,6 +13,30 @@ namespace SwAutomationAddin
             _swApp = swApp;
         }
 
+        public string ReadProperty(ModelDoc2 swModel, string propName)
+        {
+            if (swModel == null) return "";
+            CustomPropertyManager propMgr = swModel.Extension.get_CustomPropertyManager("");
+            if (propMgr == null) return "";
+            
+            string valOut = "";
+            string resValOut = "";
+            bool wasResolved = false;
+            
+            propMgr.Get5(propName, false, out valOut, out resValOut, out wasResolved);
+            return resValOut;
+        }
+
+        public void WriteProperty(ModelDoc2 swModel, string propName, string propValue)
+        {
+            if (swModel == null || string.IsNullOrEmpty(propName)) return;
+            CustomPropertyManager propMgr = swModel.Extension.get_CustomPropertyManager("");
+            if (propMgr != null)
+            {
+                AddOrUpdateProperty(propMgr, propName, propValue);
+            }
+        }
+
         /// <summary>
         /// Ghi các thuộc tính vào file hiện tại, hoặc các chi tiết (components) đang được chọn nếu ở trong Assembly
         /// </summary>

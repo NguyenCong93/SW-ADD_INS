@@ -47,9 +47,13 @@ namespace SwAutomationAddin
         private RadioButton radNameDrawingNo, radNameUnitName, radNameMachineName;
         private Button btnDoExport, btnExportBomList;
         private Button btnSetupProperties, btnApplyProps;
-        private TextBox txtPropTitle, txtPropPartName, txtPropUnit, txtPropNameProject;
-        private TextBox txtPropMaterial, txtPropSurface, txtPropHeat, txtPropManufacturer;
+        private TextBox txtPropTitle, txtPropPartName, txtPropUnit;
+        private ComboBox cbPropNameProject;
+        private TextBox txtPropMaterial, txtPropSurface, txtPropHeat;
         private ComboBox cbPropDesign, cbPropMakeOrBuy;
+        private TextBox txtPropDraw, txtPropCheck, txtPropApprove, txtPropRevision, txtPropQty, txtPropAllQty;
+        private GroupBox gbInputs;
+        private SyncManager _syncMgr;
         private Button btnBatchRename, btnAutoDrawing;
         private StatusStrip statusBar;
         private ToolStripStatusLabel lblStatus;
@@ -87,6 +91,10 @@ namespace SwAutomationAddin
         public void Setup(ISldWorks swApp)
         {
             _swApp = swApp;
+            _syncMgr = new SyncManager();
+            _syncMgr.OnDataSynced += () => { BeginInvoke((Action)UpdateUIState); };
+            _syncMgr.SyncAsync();
+            
             _propMgr = new PropertyManager(_swApp);
             _interferenceMgr = new InterferenceManager(_swApp);
             _exportMgr = new ExportManager(_swApp);
@@ -130,6 +138,7 @@ namespace SwAutomationAddin
                 chkXt.Enabled = !isDrw;
 
                 SetStatus(swModel != null ? "Đang mở: " + swModel.GetTitle() : "Chưa mở file");
+                LoadPropertiesUI(swModel);
             }
             catch { }
         }
@@ -317,36 +326,114 @@ namespace SwAutomationAddin
             btnSetupProperties = CreateButton("Cài Đặt System Properties Mặc Định", true); btnSetupProperties.Width = CONTENT_WIDTH;
             flow.Controls.Add(btnSetupProperties);
 
-            GroupBox gbInputs = new GroupBox() { Text = "Nhập Thuộc Tính Nhanh", Width = CONTENT_WIDTH, Height = 370 };
-            int y = 20;
-            txtPropTitle = AddFieldRow(gbInputs, "Mã BV (Title):", ref y);
-            txtPropPartName = AddFieldRow(gbInputs, "Tên CT (Part Name):", ref y);
-            txtPropUnit = AddFieldRow(gbInputs, "Cụm (Unit):", ref y);
-            txtPropNameProject = AddFieldRow(gbInputs, "Máy (Project):", ref y);
-
-            gbInputs.Controls.Add(CreateLabel("Thiết kế:")); gbInputs.Controls[gbInputs.Controls.Count - 1].Location = new Point(10, y);
-            cbPropDesign = new ComboBox() { Location = new Point(105, y - 3), Width = 165 };
-            cbPropDesign.Items.AddRange(new object[] { "VISC", "R&D" });
-            gbInputs.Controls.Add(cbPropDesign); y += FIELD_HEIGHT;
-
-            txtPropMaterial = AddFieldRow(gbInputs, "Vật liệu:", ref y);
-            txtPropSurface = AddFieldRow(gbInputs, "Xử lý bề mặt:", ref y);
-            txtPropHeat = AddFieldRow(gbInputs, "Nhiệt luyện:", ref y);
-            txtPropManufacturer = AddFieldRow(gbInputs, "Hãng SX:", ref y);
-
-            gbInputs.Controls.Add(CreateLabel("Phân loại:")); gbInputs.Controls[gbInputs.Controls.Count - 1].Location = new Point(10, y);
-            cbPropMakeOrBuy = new ComboBox() { Location = new Point(105, y - 3), Width = 165, DropDownStyle = ComboBoxStyle.DropDownList };
-            cbPropMakeOrBuy.Items.AddRange(new object[] { "MF (Gia công)", "PUR (Tiêu chuẩn/Mua ngoài)" });
-            cbPropMakeOrBuy.SelectedIndex = 0;
-            gbInputs.Controls.Add(cbPropMakeOrBuy); y += FIELD_HEIGHT + 5;
-
+            gbInputs = new GroupBox() { Text = "Nhập Thuộc Tính Nhanh", Width = CONTENT_WIDTH, Height = 450 };
+            
             btnApplyProps = CreateButton("LƯU THUỘC TÍNH VÀO FILE", true);
-            btnApplyProps.Location = new Point(10, y); btnApplyProps.Width = 260; btnApplyProps.Height = 40; btnApplyProps.Dock = DockStyle.None;
+            btnApplyProps.Location = new Point(10, 400); btnApplyProps.Width = 260; btnApplyProps.Height = 40; btnApplyProps.Dock = DockStyle.None;
             btnApplyProps.Click += BtnApplyProps_Click;
+            
             gbInputs.Controls.Add(btnApplyProps);
 
             flow.Controls.Add(gbInputs);
             page.Controls.Add(flow);
+        }
+
+        private void LoadPropertiesUI(ModelDoc2 swModel)
+        {
+            if (gbInputs == null || btnApplyProps == null) return;
+            
+            // Clear old controls except btnApplyProps
+            for (int i = gbInputs.Controls.Count - 1; i >= 0; i--)
+            {
+                if (gbInputs.Controls[i] != btnApplyProps)
+                {
+                    gbInputs.Controls[i].Dispose();
+                }
+            }
+
+            if (swModel == null)
+            {
+                gbInputs.Text = "Không có tài liệu nào đang mở";
+                btnApplyProps.Enabled = false;
+                return;
+            }
+
+            btnApplyProps.Enabled = true;
+            int docType = swModel.GetType();
+            int y = 20;
+
+            if (docType == (int)swDocumentTypes_e.swDocPART)
+            {
+                gbInputs.Text = "Thuộc Tính Chi Tiết (Part)";
+                txtPropTitle = AddFieldRowWithData(gbInputs, "Mã BV (Title):", ref y, swModel, "Title");
+                txtPropUnit = AddFieldRowWithData(gbInputs, "Cụm (Unit):", ref y, swModel, "Unit Name");
+                txtPropPartName = AddFieldRowWithData(gbInputs, "Tên CT (PartName):", ref y, swModel, "Part Name");
+                cbPropDesign = AddComboRowWithData(gbInputs, "Thiết kế:", ref y, swModel, "Designer", new[] { "VISC", "R&D" });
+                
+                string matVal = _propMgr.ReadProperty(swModel, "Material");
+                if (string.IsNullOrEmpty(matVal)) matVal = "\"SW-Material\""; // default link
+                txtPropMaterial = AddFieldRow(gbInputs, "Vật liệu:", ref y); txtPropMaterial.Text = matVal;
+                
+                txtPropSurface = AddFieldRowWithData(gbInputs, "Xử lý bề mặt:", ref y, swModel, "Surface Treatment");
+                txtPropHeat = AddFieldRowWithData(gbInputs, "Nhiệt luyện:", ref y, swModel, "Heat Treatment");
+                cbPropMakeOrBuy = AddComboRowWithData(gbInputs, "Phân loại:", ref y, swModel, "Part Type", new[] { "MF (Gia công)", "PUR (Tiêu chuẩn/Mua ngoài)" });
+            }
+            else if (docType == (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                gbInputs.Text = "Thuộc Tính Cụm (Assembly)";
+                cbPropNameProject = AddComboRowWithData(gbInputs, "Máy (Project):", ref y, swModel, "Project", GetProjectList());
+                txtPropTitle = AddFieldRowWithData(gbInputs, "Mã BV (Title):", ref y, swModel, "Title");
+                txtPropUnit = AddFieldRowWithData(gbInputs, "Cụm (Unit):", ref y, swModel, "Unit Name");
+                cbPropDesign = AddComboRowWithData(gbInputs, "Thiết kế:", ref y, swModel, "Designer", new[] { "VISC", "R&D" });
+                cbPropMakeOrBuy = AddComboRowWithData(gbInputs, "Phân loại:", ref y, swModel, "Part Type", new[] { "MF (Gia công)", "PUR (Tiêu chuẩn/Mua ngoài)" });
+            }
+            else if (docType == (int)swDocumentTypes_e.swDocDRAWING)
+            {
+                gbInputs.Text = "Thuộc Tính Bản Vẽ (Drawing)";
+                txtPropDraw = AddFieldRowWithData(gbInputs, "Người vẽ:", ref y, swModel, "DrawnBy");
+                txtPropCheck = AddFieldRowWithData(gbInputs, "Kiểm tra:", ref y, swModel, "CheckedBy");
+                txtPropApprove = AddFieldRowWithData(gbInputs, "Người duyệt:", ref y, swModel, "ApprovedBy");
+                txtPropRevision = AddFieldRowWithData(gbInputs, "Phiên bản:", ref y, swModel, "Revision");
+                txtPropQty = AddFieldRowWithData(gbInputs, "Số lượng:", ref y, swModel, "Qty");
+                txtPropAllQty = AddFieldRowWithData(gbInputs, "Tổng SL:", ref y, swModel, "All Qty");
+            }
+            
+            gbInputs.Height = y + 60;
+            btnApplyProps.Location = new Point(10, y + 10);
+        }
+
+        private string[] GetProjectList()
+        {
+            if (_syncMgr != null && _syncMgr.CacheData != null && _syncMgr.CacheData.projects != null)
+            {
+                System.Collections.Generic.List<string> list = new System.Collections.Generic.List<string>();
+                foreach(var p in _syncMgr.CacheData.projects)
+                {
+                    list.Add(p.tenDA);
+                }
+                return list.ToArray();
+            }
+            return new string[0];
+        }
+
+        private TextBox AddFieldRowWithData(GroupBox parent, string label, ref int y, ModelDoc2 swModel, string propName)
+        {
+            var txt = AddFieldRow(parent, label, ref y);
+            txt.Text = _propMgr.ReadProperty(swModel, propName);
+            return txt;
+        }
+
+        private ComboBox AddComboRowWithData(GroupBox parent, string label, ref int y, ModelDoc2 swModel, string propName, string[] items)
+        {
+            parent.Controls.Add(CreateLabel(label)); parent.Controls[parent.Controls.Count - 1].Location = new Point(10, y);
+            var cb = new ComboBox() { Location = new Point(105, y - 3), Width = 165 };
+            if (items.Length > 0 && items[0].Contains("MF")) cb.DropDownStyle = ComboBoxStyle.DropDownList;
+            cb.Items.AddRange(items);
+            string val = _propMgr.ReadProperty(swModel, propName);
+            if (!string.IsNullOrEmpty(val)) cb.Text = val;
+            else if (items.Length > 0) cb.SelectedIndex = 0;
+            parent.Controls.Add(cb); y += FIELD_HEIGHT + 5;
+            return cb;
         }
 
         private TextBox AddFieldRow(GroupBox parent, string label, ref int y)
@@ -441,16 +528,36 @@ namespace SwAutomationAddin
             try
             {
                 CustomPropertyManager pm = swModel.Extension.get_CustomPropertyManager("");
-                SetProp(pm, "Title", txtPropTitle.Text);
-                SetProp(pm, "Part Name", txtPropPartName.Text);
-                SetProp(pm, "Unit", txtPropUnit.Text);
-                SetProp(pm, "Name Project", txtPropNameProject.Text);
-                SetProp(pm, "Design", cbPropDesign.Text);
-                SetProp(pm, "Material", txtPropMaterial.Text);
-                SetProp(pm, "Surface Treatment", txtPropSurface.Text);
-                SetProp(pm, "Heat Treatment", txtPropHeat.Text);
-                SetProp(pm, "Manufacturer", txtPropManufacturer.Text);
-                SetProp(pm, "MakeOrBuy", cbPropMakeOrBuy.SelectedIndex == 0 ? "MF" : "PUR");
+                int docType = swModel.GetType();
+                
+                if (docType == (int)swDocumentTypes_e.swDocPART)
+                {
+                    if (txtPropTitle != null) SetProp(pm, "Title", txtPropTitle.Text);
+                    if (txtPropUnit != null) SetProp(pm, "Unit Name", txtPropUnit.Text);
+                    if (txtPropPartName != null) SetProp(pm, "Part Name", txtPropPartName.Text);
+                    if (cbPropDesign != null) SetProp(pm, "Designer", cbPropDesign.Text);
+                    if (txtPropMaterial != null) SetProp(pm, "Material", txtPropMaterial.Text);
+                    if (txtPropSurface != null) SetProp(pm, "Surface Treatment", txtPropSurface.Text);
+                    if (txtPropHeat != null) SetProp(pm, "Heat Treatment", txtPropHeat.Text);
+                    if (cbPropMakeOrBuy != null) SetProp(pm, "Part Type", cbPropMakeOrBuy.Text);
+                }
+                else if (docType == (int)swDocumentTypes_e.swDocASSEMBLY)
+                {
+                    if (cbPropNameProject != null) SetProp(pm, "Project", cbPropNameProject.Text);
+                    if (txtPropTitle != null) SetProp(pm, "Title", txtPropTitle.Text);
+                    if (txtPropUnit != null) SetProp(pm, "Unit Name", txtPropUnit.Text);
+                    if (cbPropDesign != null) SetProp(pm, "Designer", cbPropDesign.Text);
+                    if (cbPropMakeOrBuy != null) SetProp(pm, "Part Type", cbPropMakeOrBuy.Text);
+                }
+                else if (docType == (int)swDocumentTypes_e.swDocDRAWING)
+                {
+                    if (txtPropDraw != null) SetProp(pm, "DrawnBy", txtPropDraw.Text);
+                    if (txtPropCheck != null) SetProp(pm, "CheckedBy", txtPropCheck.Text);
+                    if (txtPropApprove != null) SetProp(pm, "ApprovedBy", txtPropApprove.Text);
+                    if (txtPropRevision != null) SetProp(pm, "Revision", txtPropRevision.Text);
+                    if (txtPropQty != null) SetProp(pm, "Qty", txtPropQty.Text);
+                    if (txtPropAllQty != null) SetProp(pm, "All Qty", txtPropAllQty.Text);
+                }
                 SetStatus("Lưu thuộc tính thành công!");
             }
             catch (Exception ex) { SetStatus("Lỗi: " + ex.Message); }
