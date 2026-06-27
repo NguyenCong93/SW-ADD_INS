@@ -20,6 +20,7 @@ namespace SwAutomationAddin
         private ExportManager _exportMgr;
         private BomManager _bomMgr;
         private DrawingManager _drawingMgr;
+        private PackAndGoManager _packAndGoMgr;
         private bool _disposed = false;
 
         // UI Style Constants
@@ -73,12 +74,16 @@ namespace SwAutomationAddin
                 {
                     // Release managed resources
                     if (statusBar != null) statusBar.Dispose();
+                    UIFont?.Dispose();
+                    UIFontBold?.Dispose();
+                    UIFontLarge?.Dispose();
                 }
                 // Release COM references
                 _interferenceMgr = null;
                 _exportMgr = null;
                 _bomMgr = null;
                 _drawingMgr = null;
+                _packAndGoMgr = null;
                 _propMgr = null;
                 _swApp = null;
                 _disposed = true;
@@ -100,13 +105,14 @@ namespace SwAutomationAddin
             _exportMgr = new ExportManager(_swApp);
             _bomMgr = new BomManager(_swApp);
             _drawingMgr = new DrawingManager(_swApp);
+            _packAndGoMgr = new PackAndGoManager(_swApp);
 
             // Hook SW events instead of polling with Timer
             try
             {
                 ((SldWorks)_swApp).ActiveDocChangeNotify += OnActiveDocChanged;
-                ((SldWorks)_swApp).FileOpenPostNotify += delegate(string f) { UpdateUIState(); return 0; };
-                ((SldWorks)_swApp).FileCloseNotify += delegate(string f, int r) { BeginInvoke((Action)UpdateUIState); return 0; };
+                ((SldWorks)_swApp).FileOpenPostNotify += delegate (string f) { UpdateUIState(); return 0; };
+                ((SldWorks)_swApp).FileCloseNotify += delegate (string f, int r) { BeginInvoke((Action)UpdateUIState); return 0; };
             }
             catch { /* Fallback: UI state updated on tab switch */ }
 
@@ -133,6 +139,7 @@ namespace SwAutomationAddin
 
                 btnCheckClash.Enabled = isAsm;
                 btnExportBomList.Enabled = isAsm;
+                btnPackAndGo.Enabled = isAsm;
                 chkPdf3D.Enabled = !isDrw;
                 chkStp.Enabled = !isDrw;
                 chkXt.Enabled = !isDrw;
@@ -188,7 +195,17 @@ namespace SwAutomationAddin
                     }));
                     return;
                 }
-                BeginInvoke((Action)(() => { this.Enabled = true; if (onDone != null) onDone(); }));
+                BeginInvoke((Action)(() => {
+                    this.Enabled = true;
+                    try
+                    {
+                        if (onDone != null) onDone();
+                    }
+                    catch (Exception ex)
+                    {
+                        SetStatus("Lỗi callback: " + ex.Message);
+                    }
+                }));
             });
         }
         #endregion
@@ -217,11 +234,11 @@ namespace SwAutomationAddin
             // Tab control fills remaining space
             mainTabControl = new TabControl() { Dock = DockStyle.Fill, Multiline = true, Font = UIFont };
 
-            tabRename  = new TabPage("🔄 Đổi Tên");
-            tabProps   = new TabPage("⚙️ Thuộc Tính");
-            tabExport  = new TabPage("📥 Xuất File");
+            tabRename = new TabPage("🔄 Đổi Tên");
+            tabProps = new TabPage("⚙️ Thuộc Tính");
+            tabExport = new TabPage("📥 Xuất File");
             tabDrawing = new TabPage("📐 Bản Vẽ");
-            tabAbout   = new TabPage("ℹ️ About");
+            tabAbout = new TabPage("ℹ️ About");
 
             mainTabControl.TabPages.AddRange(new[] { tabRename, tabProps, tabExport, tabDrawing, tabAbout });
 
@@ -263,6 +280,7 @@ namespace SwAutomationAddin
             tbl.Controls.Add(btnEndClash, 2, 1);
 
             btnPackAndGo = CreateButton("Pack and Go", true); btnPackAndGo.Dock = DockStyle.Fill;
+            btnPackAndGo.Click += BtnPackAndGo_Click;
             tbl.Controls.Add(btnPackAndGo, 0, 2);
             tbl.SetColumnSpan(btnPackAndGo, 3);
 
@@ -308,10 +326,12 @@ namespace SwAutomationAddin
             flow.Controls.Add(gbSheet);
 
             btnDoExport = CreateButton("THỰC HIỆN XUẤT FILE", true); btnDoExport.Width = CONTENT_WIDTH; btnDoExport.Height = 40;
+            btnDoExport.Click += BtnDoExport_Click;
             flow.Controls.Add(btnDoExport);
 
             GroupBox gbBom = new GroupBox() { Text = "Xuất BOM List Excel", Width = CONTENT_WIDTH, Height = 60 };
             btnExportBomList = CreateButton("Xuất BOM (Tiêu chuẩn & Gia công)"); btnExportBomList.Dock = DockStyle.Fill;
+            btnExportBomList.Click += BtnExportBomList_Click;
             gbBom.Controls.Add(btnExportBomList);
             flow.Controls.Add(gbBom);
 
@@ -323,7 +343,9 @@ namespace SwAutomationAddin
             page.AutoScroll = true;
             var flow = new FlowLayoutPanel() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(MARGIN) };
 
-            btnSetupProperties = CreateButton("Cài Đặt System Properties Mặc Định", true); btnSetupProperties.Width = CONTENT_WIDTH;
+            btnSetupProperties = CreateButton("Cài Đặt System Properties Mặc Định", true);
+            btnSetupProperties.Width = CONTENT_WIDTH;
+            btnSetupProperties.Click += BtnSetupProperties_Click;
             flow.Controls.Add(btnSetupProperties);
 
             gbInputs = new GroupBox() { Text = "Nhập Thuộc Tính Nhanh", Width = CONTENT_WIDTH, Height = 450 };
@@ -449,9 +471,10 @@ namespace SwAutomationAddin
         {
             btnBatchRename = CreateButton("Đổi Tên Chi Tiết Hàng Loạt", true);
             btnBatchRename.Dock = DockStyle.Top; btnBatchRename.Height = 50;
+            btnBatchRename.Click += BtnBatchRename_Click;
             page.Controls.Add(btnBatchRename);
 
-            var lbl = new Label() { Text = "(Tính năng Đổi tên hàng loạt sẽ được phát triển tiếp)", Dock = DockStyle.Top, Height = 50, Padding = new Padding(10) };
+            var lbl = new Label() { Text = "(Chọn components trong Assembly → Nhập tên mới → Áp dụng)", Dock = DockStyle.Top, Height = 50, Padding = new Padding(10) };
             page.Controls.Add(lbl);
         }
 
@@ -459,9 +482,10 @@ namespace SwAutomationAddin
         {
             btnAutoDrawing = CreateButton("Tạo Bản Vẽ Tự Động", true);
             btnAutoDrawing.Dock = DockStyle.Top; btnAutoDrawing.Height = 50;
+            btnAutoDrawing.Click += BtnAutoDrawing_Click;
             page.Controls.Add(btnAutoDrawing);
 
-            var lbl = new Label() { Text = "- Part: 1 Sheet\n- Assembly: Multi-sheet (BOM + Tổng thể + Các chi tiết lẻ)", Dock = DockStyle.Top, Height = 80, Padding = new Padding(10) };
+            var lbl = new Label() { Text = "- Part: 1 Sheet với 4 view (Front, Top, Right, Iso)\n- Assembly: Multi-sheet (BOM + Tổng thể + Các chi tiết lẻ)", Dock = DockStyle.Top, Height = 80, Padding = new Padding(10) };
             page.Controls.Add(lbl);
         }
 
@@ -469,8 +493,8 @@ namespace SwAutomationAddin
         {
             var lblTitle = new Label() { Text = "VISC SolidWorks Add-in", Dock = DockStyle.Top, Height = 40, TextAlign = ContentAlignment.MiddleCenter, Font = UIFontLarge };
             var lblDesc = new Label() { Text = "Phiên bản: 1.0.0\nPhát triển bởi đội ngũ R&D", Dock = DockStyle.Top, Height = 50, TextAlign = ContentAlignment.TopCenter };
-            page.Controls.Add(lblDesc);
             page.Controls.Add(lblTitle);
+            page.Controls.Add(lblDesc);
         }
         #endregion
 
@@ -514,6 +538,76 @@ namespace SwAutomationAddin
             btnCheckClash.Text = "Kiểm Tra Va Chạm";
             btnNextClash.Enabled = false; btnPrevClash.Enabled = false; btnEndClash.Enabled = false;
             SetStatus("Kết thúc kiểm tra va chạm");
+        }
+
+        private void BtnPackAndGo_Click(object sender, EventArgs e)
+        {
+            if (_swApp == null) return;
+            ModelDoc2 swModel = (ModelDoc2)_swApp.ActiveDoc;
+            if (swModel == null || swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                SetStatus("Vui lòng mở Assembly để Pack and Go!");
+                return;
+            }
+
+            RunAsync(
+                () => _packAndGoMgr.ExecutePackAndGo(),
+                () => SetStatus("Pack and Go hoàn tất!")
+            );
+        }
+
+        private void BtnBatchRename_Click(object sender, EventArgs e)
+        {
+            if (_swApp == null) return;
+            ModelDoc2 swModel = (ModelDoc2)_swApp.ActiveDoc;
+            if (swModel == null || swModel.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                SetStatus("Vui lòng mở Assembly để đổi tên!");
+                return;
+            }
+
+            // Hiển thị dialog nhập tên mới
+            using (var form = new BatchRenameForm())
+            {
+                if (form.ShowDialog() == DialogResult.OK)
+                {
+                    string newName = form.NewName;
+                    RunAsync(
+                        () => _propMgr.RenameActiveDocumentInTree(newName),
+                        () => SetStatus("Đổi tên thành công!")
+                    );
+                }
+            }
+        }
+
+        private void BtnAutoDrawing_Click(object sender, EventArgs e)
+        {
+            if (_swApp == null) return;
+            ModelDoc2 swModel = (ModelDoc2)_swApp.ActiveDoc;
+            if (swModel == null)
+            {
+                SetStatus("Vui lòng mở Part hoặc Assembly!");
+                return;
+            }
+
+            RunAsync(
+                () => _drawingMgr.CreateDrawingAndAutoDim(),
+                () => SetStatus("Tạo bản vẽ thành công!")
+            );
+        }
+
+        private void BtnSetupProperties_Click(object sender, EventArgs e)
+        {
+            // Mở dialog cấu hình properties mặc định
+            MessageBox.Show(
+                "Hướng dẫn:\n\n" +
+                "1. Nhập các thông tin cơ bản ở bên dưới\n" +
+                "2. Click 'LƯU THUỘC TÍNH VÀO FILE'\n" +
+                "3. Các properties sẽ được ghi vào file hiện tại\n\n" +
+                "Hoặc: Chọn components trong Assembly rồi thực hiện để ghi cho từng chi tiết",
+                "Cài Đặt Thuộc Tính",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
         }
 
         private void BtnApplyProps_Click(object sender, EventArgs e)
@@ -561,6 +655,59 @@ namespace SwAutomationAddin
                 SetStatus("Lưu thuộc tính thành công!");
             }
             catch (Exception ex) { SetStatus("Lỗi: " + ex.Message); }
+        }
+
+        private void BtnDoExport_Click(object sender, EventArgs e)
+        {
+            if (_swApp == null) return;
+            
+            // Đọc trạng thái UI trên luồng chính (UI Thread)
+            FileNamingRule namingRule = FileNamingRule.DrawingNo;
+            if (radNameUnitName.Checked) namingRule = FileNamingRule.UnitName;
+            else if (radNameMachineName.Checked) namingRule = FileNamingRule.MachineName;
+
+            SheetExportOption sheetOption = SheetExportOption.ActiveSheet;
+            if (radPdfSheetAll.Checked) sheetOption = SheetExportOption.AllSheetsInOneFile;
+            else if (radPdfSheetSeparate.Checked) sheetOption = SheetExportOption.SeparateFiles;
+            else if (radPdfSheetRange.Checked) sheetOption = SheetExportOption.RangeSheets;
+
+            string sheetRange = txtPdfSheetRange.Text;
+            
+            bool expPdf2D = chkPdf2D.Checked;
+            bool expPdf3D = chkPdf3D.Checked;
+            bool expDxf = chkDxf.Checked;
+            bool expDwg = chkDwg.Checked;
+            bool expStp = chkStp.Checked;
+            bool expXt = chkXt.Checked;
+            string dxfVersion = cbDxfVersion.SelectedItem?.ToString();
+
+            RunAsync(() =>
+            {
+                // Thực thi xuất file trong luồng nền
+                if (expPdf2D) _exportMgr.ExportDrawingToPDF2D(namingRule, sheetOption, sheetRange);
+                if (expPdf3D) _exportMgr.ExportToPDF3D(namingRule);
+                if (expDxf) _exportMgr.ExportDrawingToDxfDwg(true, dxfVersion, namingRule, sheetOption, sheetRange);
+                if (expDwg) _exportMgr.ExportDrawingToDxfDwg(false, dxfVersion, namingRule, sheetOption, sheetRange);
+                if (expStp) _exportMgr.ExportToStepOrXt(true, namingRule);
+                if (expXt) _exportMgr.ExportToStepOrXt(false, namingRule);
+
+            }, () => SetStatus("Quá trình xuất file hoàn tất!"));
+        }
+
+        private void BtnExportBomList_Click(object sender, EventArgs e)
+        {
+            if (_bomMgr == null || _swApp == null) return;
+            ModelDoc2 m = (ModelDoc2)_swApp.ActiveDoc;
+            if (m == null || m.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                SetStatus("Chỉ dùng được trong Assembly!");
+                return;
+            }
+
+            RunAsync(
+                () => _bomMgr.ExportBomToExcel(),
+                () => SetStatus("Xuất BOM thành công!")
+            );
         }
 
         private void SetProp(CustomPropertyManager pm, string name, string val)
